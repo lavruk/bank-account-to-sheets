@@ -718,9 +718,12 @@ function createLinkToken() {
       "language": "en",
       "country_codes": ["US"],
       "user": {
-        "client_user_id": Session.getEffectiveUser().getEmail(),
+        "client_user_id": '1',
+        "email_address": getSecrets().USER_EMAIL
       },
       "products": ["transactions"],
+      "hosted_link": {
+      },
     };
 
     // Condense the above into a single object
@@ -739,8 +742,8 @@ function createLinkToken() {
     Logger.log(JSON.stringify(result, null, 2));
 
     // Tell the user that it was successful
-    if (result.link_token) {
-        SpreadsheetApp.getActiveSpreadsheet().toast(`Successfully created a link token: ${result.link_token}`);
+    if (result.hosted_link_url) {
+        SpreadsheetApp.getActiveSpreadsheet().toast(`Successfully created a link: ${result.hosted_link_url}`);
     } else {
         SpreadsheetApp.getActiveSpreadsheet().toast('Call to Plaid was successful, but no link token was returned.');
         Logger.log('Call to Plaid was successful, but no link token was returned. Full response logged above.');
@@ -752,6 +755,40 @@ function createLinkToken() {
   }
 }
 
+/**
+ * Get a link token to be used to initialize Plaid Link.
+ */
+function getLinkToken() {
+
+  try {
+    // Prepare the request body
+    const body = {
+      "client_id": getSecrets().CLIENT_ID,
+      "secret": getSecrets().SECRET,
+      "link_token": "link-production-270c9987-970a-4dcf-b0a5-d3facd2eaef2",
+    };
+
+    // Condense the above into a single object
+    const params = {
+      "contentType": "application/json",
+      "method": "post",
+      "payload": JSON.stringify(body),
+      "muteHttpExceptions": true
+    };
+
+    // Make the POST request
+    const responseText = makeRequest(`${getSecrets().URL}/link/token/get`, params);
+    const result = JSON.parse(responseText);
+
+    Logger.log('Full response from /link/token/get:');
+    Logger.log(JSON.stringify(result, null, 2));
+
+  } catch (e) {
+    Logger.log('An error occurred in getLinkToken:');
+    Logger.log(e);
+    SpreadsheetApp.getActiveSpreadsheet().toast(`Failed to get link token. Check logs for details. Error: ${e.message}`);
+  }
+}
 
 /**
  * Adds the Scripts menu to the menu bar at the top.
