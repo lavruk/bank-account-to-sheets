@@ -38,6 +38,72 @@ function makeRequest(url, params) {
 
 
 /**
+ * Gets information about a link token.
+ */
+function getLinkTokenInfo() {
+  try {
+    // Get the Plaid sheet
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Plaid");
+    if (!sheet) {
+      SpreadsheetApp.getActiveSpreadsheet().toast("The 'Plaid' sheet does not exist. Please create a link token first.");
+      return;
+    }
+
+    // Get the last link_token from the sheet
+    const lastRow = sheet.getLastRow();
+    if (lastRow === 0) {
+      SpreadsheetApp.getActiveSpreadsheet().toast("The 'Plaid' sheet is empty. Please create a link token first.");
+      return;
+    }
+    const linkTokenData = JSON.parse(sheet.getRange(lastRow, 1).getValue());
+    const linkToken = linkTokenData.link_token;
+
+    if (!linkToken) {
+      SpreadsheetApp.getActiveSpreadsheet().toast("Could not find a link_token in the last row of the 'Plaid' sheet.");
+      return;
+    }
+
+    // Prepare the request body
+    const body = {
+      "client_id": getSecrets().CLIENT_ID,
+      "secret": getSecrets().SECRET,
+      "link_token": linkToken,
+    };
+
+    // Condense the above into a single object
+    const params = {
+      "contentType": "application/json",
+      "method": "post",
+      "payload": JSON.stringify(body),
+      "muteHttpExceptions": true
+    };
+
+    // Make the POST request
+    const responseText = makeRequest(`${getSecrets().URL}/link/token/get`, params);
+    const result = JSON.parse(responseText);
+
+    Logger.log('Full response from /link/token/get:');
+    Logger.log(JSON.stringify(result, null, 2));
+
+    // Check for the results object and store it if present
+    if (result && result.link_sessions && result.link_sessions.length > 0 && result.link_sessions[0].results) {
+      const resultsObject = result.link_sessions[0].results;
+      sheet.getRange(lastRow, 2).setValue(JSON.stringify(resultsObject, null, 2));
+      SpreadsheetApp.getActiveSpreadsheet().toast(`Successfully retrieved and stored the 'results' object in column B.`);
+    } else {
+      Logger.log("The '/link/token/get' response did not contain a 'results' object. Nothing was written to the sheet.");
+      SpreadsheetApp.getActiveSpreadsheet().toast("Link token info retrieved, but no 'results' object was found to store.");
+    }
+
+  } catch (e) {
+    Logger.log('An error occurred in getLinkTokenInfo:');
+    Logger.log(e);
+    SpreadsheetApp.getActiveSpreadsheet().toast(`Failed to get link token info. Check logs for details. Error: ${e.message}`);
+  }
+}
+
+
+/**
  * Downloads and returns all transactions from Plaid.
  * 
  * @return {Object} the result of transactions.get, with all transactions.
@@ -777,5 +843,6 @@ function onOpen() {
   menu.addItem("Do everything", "doEverything");
   menu.addSeparator();
   menu.addItem("Create Link Token", "createLinkToken");
+  menu.addItem("Get Link Token Info", "getLinkTokenInfo");
   menu.addToUi();
 }
