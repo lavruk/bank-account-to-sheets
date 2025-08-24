@@ -15,6 +15,7 @@ function getSecrets() {
   secrets.CLIENT_ID = "your client ID";
   secrets.SECRET = "your secret";
   secrets.ACCESS_TOKEN = "your access token";
+  secrets.USER_EMAIL = "your email"
 
   return secrets;
 
