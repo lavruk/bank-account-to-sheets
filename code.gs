@@ -705,6 +705,55 @@ function doEverything() {
 
 
 /**
+ * Creates a link token to be used to initialize Plaid Link.
+ */
+function createLinkToken() {
+
+  try {
+    // Prepare the request body
+    const body = {
+      "client_id": getSecrets().CLIENT_ID,
+      "secret": getSecrets().SECRET,
+      "client_name": "Bank Account to Sheets",
+      "language": "en",
+      "country_codes": ["US"],
+      "user": {
+        "client_user_id": Session.getEffectiveUser().getEmail(),
+      },
+      "products": ["transactions"],
+    };
+
+    // Condense the above into a single object
+    const params = {
+      "contentType": "application/json",
+      "method": "post",
+      "payload": JSON.stringify(body),
+      "muteHttpExceptions": true
+    };
+
+    // Make the POST request
+    const responseText = makeRequest(`${getSecrets().URL}/link/token/create`, params);
+    const result = JSON.parse(responseText);
+
+    Logger.log('Full response from /link/token/create:');
+    Logger.log(JSON.stringify(result, null, 2));
+
+    // Tell the user that it was successful
+    if (result.link_token) {
+        SpreadsheetApp.getActiveSpreadsheet().toast(`Successfully created a link token: ${result.link_token}`);
+    } else {
+        SpreadsheetApp.getActiveSpreadsheet().toast('Call to Plaid was successful, but no link token was returned.');
+        Logger.log('Call to Plaid was successful, but no link token was returned. Full response logged above.');
+    }
+  } catch (e) {
+    Logger.log('An error occurred in createLinkToken:');
+    Logger.log(e);
+    SpreadsheetApp.getActiveSpreadsheet().toast(`Failed to create link token. Check logs for details. Error: ${e.message}`);
+  }
+}
+
+
+/**
  * Adds the Scripts menu to the menu bar at the top.
  */
 function onOpen() {
@@ -716,5 +765,7 @@ function onOpen() {
   menu.addItem("Format all sheets neatly", "formatAll");
   menu.addSeparator();
   menu.addItem("Do everything", "doEverything");
+  menu.addSeparator();
+  menu.addItem("Create Link Token", "createLinkToken");
   menu.addToUi();
 }
