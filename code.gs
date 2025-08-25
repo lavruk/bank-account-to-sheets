@@ -38,6 +38,78 @@ function makeRequest(url, params) {
 
 
 /**
+ * Exchanges a public token for an access token and stores it in the 'PlaidConfig' sheet.
+ */
+function exchangePublicToken() {
+  try {
+    // Get or create the PlaidConfig sheet
+    let configSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("PlaidConfig");
+    if (!configSheet) {
+      configSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet("PlaidConfig");
+      configSheet.getRange("A1").setValue("last_cursor");
+      configSheet.getRange("B1").setValue("item_id");
+      configSheet.getRange("C1").setValue("access_token");
+    } else {
+        // Ensure headers are present
+        if (configSheet.getRange("B1").getValue() !== "item_id") {
+            configSheet.getRange("B1").setValue("item_id");
+        }
+        if (configSheet.getRange("C1").getValue() !== "access_token") {
+            configSheet.getRange("C1").setValue("access_token");
+        }
+    }
+
+    // Prompt user for public token
+    const ui = SpreadsheetApp.getUi();
+    const response = ui.prompt(
+      'Exchange Public Token',
+      'Please enter the public_token from Plaid Link:',
+      ui.ButtonSet.OK_CANCEL);
+
+    if (response.getSelectedButton() == ui.Button.OK) {
+      const publicToken = response.getResponseText();
+      if (publicToken) {
+        const request = {
+          client_id: getSecrets().CLIENT_ID,
+          secret: getSecrets().SECRET,
+          public_token: publicToken,
+        };
+
+        const params = {
+          method: "post",
+          contentType: "application/json",
+          payload: JSON.stringify(request),
+          muteHttpExceptions: true,
+        };
+
+        const responseText = makeRequest(`${getSecrets().URL}/item/public_token/exchange`, params);
+        const data = JSON.parse(responseText);
+
+        if (data.access_token && data.item_id) {
+          // Store the new credentials
+          const nextRow = configSheet.getLastRow() + 1;
+          configSheet.getRange(nextRow, 2).setValue(data.item_id);
+          configSheet.getRange(nextRow, 3).setValue(data.access_token);
+
+          ui.alert(`Successfully exchanged public token. Access token and item ID have been stored in the 'PlaidConfig' sheet.`);
+        } else {
+          Logger.log("Failed to exchange public token. Response did not contain access_token and item_id.");
+          Logger.log(JSON.stringify(data, null, 2));
+          ui.alert("Failed to exchange public token. Please check the logs for more details.");
+        }
+      } else {
+        ui.alert("No public token was entered.");
+      }
+    }
+  } catch (e) {
+    Logger.log(`An error occurred in exchangePublicToken: ${e.message}`);
+    Logger.log(e);
+    SpreadsheetApp.getUi().alert(`Error during public token exchange: ${e.message}`);
+  }
+}
+
+
+/**
  * Gets information about a link token.
  */
 function getLinkTokenInfo() {
@@ -128,10 +200,22 @@ function syncTransactionsFromPlaid() {
   try {
     // Iterate through each page of new transaction updates for item
     while (hasMore) {
+      // Get the access token from the last row of the PlaidConfig sheet.
+      let accessToken = configSheet.getRange(configSheet.getLastRow(), 3).getValue();
+      if (!accessToken) {
+        Logger.log("No access token found in 'PlaidConfig' sheet. Falling back to getSecrets().");
+        accessToken = getSecrets().ACCESS_TOKEN;
+      }
+
+      if (!accessToken) {
+          SpreadsheetApp.getActiveSpreadsheet().toast("No Plaid access token found. Please link an account first or set it in the script properties.");
+          throw new Error("Plaid access token not found.");
+      }
+
       const request = {
         client_id: getSecrets().CLIENT_ID,
         secret: getSecrets().SECRET,
-        access_token: getSecrets().ACCESS_TOKEN,
+        access_token: accessToken,
         cursor: cursor,
       };
 
@@ -881,5 +965,7 @@ function onOpen() {
   menu.addSeparator();
   menu.addItem("Create Link Token", "createLinkToken");
   menu.addItem("Get Link Token Info", "getLinkTokenInfo");
+  menu.addSeparator();
+  menu.addItem("Exchange Public Token", "exchangePublicToken");
   menu.addToUi();
 }
