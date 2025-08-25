@@ -108,10 +108,82 @@ function getLinkTokenInfo() {
  * 
  * @return {Object} the result of transactions.get, with all transactions.
  */
-function downloadAllTransactionsFromPlaid() {
+function syncTransactionsFromPlaid() {
+  // Get or create the PlaidConfig sheet for storing the cursor
+  let configSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("PlaidConfig");
+  if (!configSheet) {
+    configSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet("PlaidConfig");
+    configSheet.getRange("A1").setValue("last_cursor");
+    SpreadsheetApp.getActiveSpreadsheet().toast("Created 'PlaidConfig' sheet for cursor storage.");
+  }
 
-  /*// Force Plaid to refresh the transactions
-  let params = {
+  let cursor = configSheet.getRange("A2").getValue() || null;
+
+  let added = [];
+  let modified = [];
+  let removed = [];
+  let accounts = [];
+  let hasMore = true;
+
+  try {
+    // Iterate through each page of new transaction updates for item
+    while (hasMore) {
+      const request = {
+        client_id: getSecrets().CLIENT_ID,
+        secret: getSecrets().SECRET,
+        access_token: getSecrets().ACCESS_TOKEN,
+        cursor: cursor,
+      };
+
+      const params = {
+        method: "post",
+        contentType: "application/json",
+        payload: JSON.stringify(request),
+        muteHttpExceptions: true,
+      };
+
+      const responseText = makeRequest(`${getSecrets().URL}/transactions/sync`, params);
+      const data = JSON.parse(responseText);
+
+      // On the first page of the response, get the accounts.
+      if (accounts.length === 0) {
+        accounts = data.accounts || [];
+      }
+
+      // Add this page of results
+      added = added.concat(data.added);
+      modified = modified.concat(data.modified);
+      removed = removed.concat(data.removed);
+
+      hasMore = data.has_more;
+
+      // Update cursor to the next cursor
+      cursor = data.next_cursor;
+    }
+
+    // Persist cursor and updated data
+    configSheet.getRange("A2").setValue(cursor);
+    Logger.log(`Sync complete. Next cursor stored: ${cursor}`);
+
+    // The old function returned a single transactions array, so we will combine
+    // added and modified for now. This will be updated when we refactor updateTransactions.
+    // For now, this maintains some backward compatibility with the calling function.
+    const allTransactions = added.concat(modified);
+
+    // Replace the dates with JavaScript dates
+    for (const plaidTxn of allTransactions) plaidTxn.date = Date.parse(plaidTxn.date);
+
+    Logger.log(`Downloaded ${allTransactions.length} transactions from Plaid.`);
+    return { transactions: allTransactions, added, modified, removed, accounts };
+
+  } catch (e) {
+    Logger.log(`An error occurred during transaction sync: ${e.message}`);
+    Logger.log(e);
+    SpreadsheetApp.getActiveSpreadsheet().toast(`Error during transaction sync: ${e.message}`);
+    // Re-throw the error to be handled by the calling function if necessary
+    throw e;
+  }
+}
     "contentType": "application/json",
     "method": "post",
     "payload": JSON.stringify({
@@ -429,101 +501,66 @@ function updateTransactions() {
 
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Transactions");
 
-  const existing = getTransactionsFromSheet(sheet);
-  const plaid = downloadAllTransactionsFromPlaid();
+  let existing = getTransactionsFromSheet(sheet);
+  const plaid = syncTransactionsFromPlaid();
 
-  // Prepare to determine changes
-  const changes = {
-    "added": [],
-    "removed": []
-  };
+  // Handle removed transactions
+  const removed_ids = plaid.removed.map(t => t.transaction_id);
+  let kept_transactions = existing.transactions.filter(t => !removed_ids.includes(t.id));
 
-  for (let i = 0; i < plaid.transactions.length; i++) {
+  // Handle modified transactions
+  const modified_map = new Map(plaid.modified.map(t => [t.transaction_id, t]));
+  for (let i = 0; i < kept_transactions.length; i++) {
+    const existing_txn = kept_transactions[i];
+    if (modified_map.has(existing_txn.id)) {
+      const plaid_txn = modified_map.get(existing_txn.id);
+      // Add account_name which is needed by plaidToSheet
+      plaid_txn.account_name = existing_txn.account;
+      plaid_txn.date = Date.parse(plaid_txn.date); // Ensure date is in correct format
+      kept_transactions[i] = plaidToSheet(plaid_txn, existing_txn);
+    }
+  }
 
-    // Add the account name, to save work later
+  // Handle added transactions
+  for (const plaidTxn of plaid.added) {
     let account_name = "?unknown?";
     for (let j = 0; j < plaid.accounts.length; j++) {
-      if (plaid.accounts[j].account_id === plaid.transactions[i].account_id) {
+      if (plaid.accounts[j].account_id === plaidTxn.account_id) {
         account_name = plaid.accounts[j].name;
         break;
       }
     }
-    plaid.transactions[i].account_name = account_name;
-
-    let existingTxn = undefined;
-    let existingIndex;
-
-    // Search for it in existing
-    existingIndex = getIndexOfPlaidFromSheet(existing.transactions, plaid.transactions[i]);
-    if (existingIndex >= 0) {
-      existingTxn = existing.transactions[existingIndex]
-    }
-
-    // Update existing with the transaction
-    const newSheetTxn = plaidToSheet(plaid.transactions[i], existingTxn);
-    if (existingIndex >= 0) {
-      existing.transactions[existingIndex] = newSheetTxn;
-    } else {
-      existing.transactions = saveNewSheetTransaction(existing.transactions, newSheetTxn);
-      changes.added.push(newSheetTxn);
-    }
-
-  }
-  Logger.log("Finished iterating through Plaid transactions.");
-
-  // Find which old transactions have been removed
-  for (const sheetTxn of existing.transactions) {
-    if (getIndexOfIdFromPlaid(plaid.transactions, sheetTxn.id) === -1) {
-      existing.transactions.splice(existing.transactions.indexOf(sheetTxn), 1);
-      changes.removed.push(sheetTxn);
-    }
+    plaidTxn.account_name = account_name;
+    plaidTxn.date = Date.parse(plaidTxn.date); // Ensure date is in correct format
+    const newSheetTxn = plaidToSheet(plaidTxn);
+    kept_transactions = saveNewSheetTransaction(kept_transactions, newSheetTxn);
   }
 
-  if (changes.added.length === 0 && changes.removed.length === 0) {
-    Logger.log("No transactions were added or removed.");
+  const num_added = plaid.added.length;
+  const num_modified = plaid.modified.length;
+  const num_removed = plaid.removed.length;
 
-    // Tell the user that there were no new transactions
-    // An error is raised if this is called by the trigger
+  if (num_added === 0 && num_modified === 0 && num_removed === 0) {
+    Logger.log("No new transaction changes.");
     try {
       SpreadsheetApp.getActiveSpreadsheet().toast("No new changes to the transactions were found.");
-    } catch (error) {
-
-    }
+    } catch (error) {}
   } else {
-
     // Write the transactions to the sheet
-    Logger.log(`There are ${existing.transactions.length} transactions to write.`);
-    writeTransactionsToSheet(sheet, existing.transactions, existing.headers);
-    Logger.log(`Finished writing transactions to the sheet named ${sheet.getName()}.`)
+    Logger.log(`There are ${kept_transactions.length} transactions to write.`);
+    writeTransactionsToSheet(sheet, kept_transactions, existing.headers);
+    Logger.log(`Finished writing transactions to the sheet named ${sheet.getName()}.`);
 
     // Format the sheet neatly
     formatNeatlyTransactions(plaid);
     Logger.log(`Finished formatting the sheet named ${sheet.getName()} neatly.`);
 
     // Produce a message to tell the user of the changes
-    // An error is raised if this is called by the trigger
     try {
       const ui = SpreadsheetApp.getUi();
-      let message = "";
-      if (changes.added.length > 0) {
-        for (const sheetTxn of changes.added) {
-          let date = new Date();
-          date.setTime(sheetTxn.date);
-          message = `${message}ADDED: £${sheetTxn.amount} on ${formatDate(date)} from ${sheetTxn.name}.\r\n`
-        }
-      }
-      if (changes.removed.length > 0) {
-        for (const sheetTxn of changes.removed) {
-          let date = new Date();
-          date.setTime(sheetTxn.date);
-          message = `${message}REMOVED: £${sheetTxn.amount} on ${formatDate(date)} from ${sheetTxn.name}.\r\n`
-        }
-      }
-      ui.alert(`${changes.added.length} added | ${changes.removed.length} removed`, message, ui.ButtonSet.OK);
-    } catch (error) {
-
-    }
-
+      let message = `Added: ${num_added}, Modified: ${num_modified}, Removed: ${num_removed}`;
+      ui.alert("Transaction Sync Complete", message, ui.ButtonSet.OK);
+    } catch (error) {}
   }
 
   // Update when this script was last run
