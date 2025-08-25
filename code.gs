@@ -38,17 +38,15 @@ function makeRequest(url, params) {
 
 
 /**
- * Exchanges a public token for an access token and stores it in the 'PlaidConfig' sheet.
+ * Exchanges a public token for an access token (internal logic).
+ * @param {string} publicToken The public token to exchange.
  */
-function exchangePublicToken() {
-  try {
+function _exchangePublicTokenInternal(publicToken) {
     // Get or create the PlaidConfig sheet
     let configSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("PlaidConfig");
     if (!configSheet) {
       configSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet("PlaidConfig");
-      configSheet.getRange("A1").setValue("last_cursor");
-      configSheet.getRange("B1").setValue("item_id");
-      configSheet.getRange("C1").setValue("access_token");
+      configSheet.getRange("A1:C1").setValues([["last_cursor", "item_id", "access_token"]]);
     } else {
         // Ensure headers are present
         if (configSheet.getRange("B1").getValue() !== "item_id") {
@@ -59,7 +57,43 @@ function exchangePublicToken() {
         }
     }
 
-    // Prompt user for public token
+    const request = {
+      client_id: getSecrets().CLIENT_ID,
+      secret: getSecrets().SECRET,
+      public_token: publicToken,
+    };
+
+    const params = {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify(request),
+      muteHttpExceptions: true,
+    };
+
+    const responseText = makeRequest(`${getSecrets().URL}/item/public_token/exchange`, params);
+    const data = JSON.parse(responseText);
+
+    if (data.access_token && data.item_id) {
+      // Store the new credentials
+      const nextRow = configSheet.getLastRow() + 1;
+      configSheet.getRange(nextRow, 2).setValue(data.item_id);
+      configSheet.getRange(nextRow, 3).setValue(data.access_token);
+
+      SpreadsheetApp.getActiveSpreadsheet().toast(`Successfully exchanged public token. Access token stored.`);
+      Logger.log(`Successfully exchanged public token for item_id: ${data.item_id}`);
+    } else {
+      Logger.log("Failed to exchange public token. Response did not contain access_token and item_id.");
+      Logger.log(JSON.stringify(data, null, 2));
+      SpreadsheetApp.getActiveSpreadsheet().toast("Failed to exchange public token. Please check the logs.");
+      throw new Error("Failed to exchange public token.");
+    }
+}
+
+/**
+ * Exchanges a public token for an access token by prompting the user.
+ */
+function exchangePublicToken() {
+  try {
     const ui = SpreadsheetApp.getUi();
     const response = ui.prompt(
       'Exchange Public Token',
@@ -69,34 +103,7 @@ function exchangePublicToken() {
     if (response.getSelectedButton() == ui.Button.OK) {
       const publicToken = response.getResponseText();
       if (publicToken) {
-        const request = {
-          client_id: getSecrets().CLIENT_ID,
-          secret: getSecrets().SECRET,
-          public_token: publicToken,
-        };
-
-        const params = {
-          method: "post",
-          contentType: "application/json",
-          payload: JSON.stringify(request),
-          muteHttpExceptions: true,
-        };
-
-        const responseText = makeRequest(`${getSecrets().URL}/item/public_token/exchange`, params);
-        const data = JSON.parse(responseText);
-
-        if (data.access_token && data.item_id) {
-          // Store the new credentials
-          const nextRow = configSheet.getLastRow() + 1;
-          configSheet.getRange(nextRow, 2).setValue(data.item_id);
-          configSheet.getRange(nextRow, 3).setValue(data.access_token);
-
-          ui.alert(`Successfully exchanged public token. Access token and item ID have been stored in the 'PlaidConfig' sheet.`);
-        } else {
-          Logger.log("Failed to exchange public token. Response did not contain access_token and item_id.");
-          Logger.log(JSON.stringify(data, null, 2));
-          ui.alert("Failed to exchange public token. Please check the logs for more details.");
-        }
+        _exchangePublicTokenInternal(publicToken);
       } else {
         ui.alert("No public token was entered.");
       }
@@ -157,7 +164,19 @@ function getLinkTokenInfo() {
     Logger.log('Full response from /link/token/get:');
     Logger.log(JSON.stringify(result, null, 2));
 
-    // Check for the results object and store it if present
+    // Automatically exchange public token if one is available
+    if (result && result.link_sessions && result.link_sessions.length > 0) {
+      for (const session of result.link_sessions) {
+        if (session.on_success && session.on_success.public_token) {
+          Logger.log("Public token found in /link/token/get response. Exchanging automatically.");
+          _exchangePublicTokenInternal(session.on_success.public_token);
+          // We'll just exchange the first one we find and then break.
+          break;
+        }
+      }
+    }
+
+    // Check for the results object from a completed Link flow and store it if present
     if (result && result.link_sessions && result.link_sessions.length > 0 && result.link_sessions[0].results) {
       const resultsObject = result.link_sessions[0].results;
       sheet.getRange(lastRow, 2).setValue(JSON.stringify(resultsObject, null, 2));
