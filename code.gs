@@ -38,72 +38,222 @@ function makeRequest(url, params) {
 
 
 /**
+ * Exchanges a public token for an access token (internal logic).
+ * @param {string} publicToken The public token to exchange.
+ */
+function _exchangePublicTokenInternal(publicToken) {
+    // Get or create the Plaid sheet
+    let sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Plaid");
+    if (!sheet) {
+      sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet("Plaid");
+    }
+
+    // Ensure headers are present
+    const headers = ["link_token_response", "link_get_response", "last_cursor", "item_id", "access_token"];
+    for (let i = 0; i < headers.length; i++) {
+        if (sheet.getRange(1, i + 1).getValue() !== headers[i]) {
+            sheet.getRange(1, i + 1).setValue(headers[i]);
+        }
+    }
+
+    const request = {
+      client_id: getSecrets().CLIENT_ID,
+      secret: getSecrets().SECRET,
+      public_token: publicToken,
+    };
+
+    const params = {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify(request),
+      muteHttpExceptions: true,
+    };
+
+    const responseText = makeRequest(`${getSecrets().URL}/item/public_token/exchange`, params);
+    const data = JSON.parse(responseText);
+
+    if (data.access_token && data.item_id) {
+      // Store the new credentials in the last row
+      const lastRow = sheet.getLastRow();
+      sheet.getRange(lastRow, 4).setValue(data.item_id);
+      sheet.getRange(lastRow, 5).setValue(data.access_token);
+
+      SpreadsheetApp.getActiveSpreadsheet().toast(`Successfully exchanged public token. Access token stored.`);
+      Logger.log(`Successfully exchanged public token for item_id: ${data.item_id}`);
+    } else {
+      Logger.log("Failed to exchange public token. Response did not contain access_token and item_id.");
+      Logger.log(JSON.stringify(data, null, 2));
+      SpreadsheetApp.getActiveSpreadsheet().toast("Failed to exchange public token. Please check the logs.");
+      throw new Error("Failed to exchange public token.");
+    }
+}
+
+
+/**
+ * Gets information about a link token.
+ */
+function getLinkTokenInfo() {
+  try {
+    // Get the Plaid sheet
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Plaid");
+    if (!sheet) {
+      SpreadsheetApp.getActiveSpreadsheet().toast("The 'Plaid' sheet does not exist. Please create a link token first.");
+      return;
+    }
+
+    // Get the last link_token from the sheet
+    const lastRow = sheet.getLastRow();
+    if (lastRow === 0) {
+      SpreadsheetApp.getActiveSpreadsheet().toast("The 'Plaid' sheet is empty. Please create a link token first.");
+      return;
+    }
+    const linkTokenData = JSON.parse(sheet.getRange(lastRow, 1).getValue());
+    const linkToken = linkTokenData.link_token;
+
+    if (!linkToken) {
+      SpreadsheetApp.getActiveSpreadsheet().toast("Could not find a link_token in the last row of the 'Plaid' sheet.");
+      return;
+    }
+
+    // Prepare the request body
+    const body = {
+      "client_id": getSecrets().CLIENT_ID,
+      "secret": getSecrets().SECRET,
+      "link_token": linkToken,
+    };
+
+    // Condense the above into a single object
+    const params = {
+      "contentType": "application/json",
+      "method": "post",
+      "payload": JSON.stringify(body),
+      "muteHttpExceptions": true
+    };
+
+    // Make the POST request
+    const responseText = makeRequest(`${getSecrets().URL}/link/token/get`, params);
+    const result = JSON.parse(responseText);
+
+    Logger.log('Full response from /link/token/get:');
+    Logger.log(JSON.stringify(result, null, 2));
+
+    // Automatically exchange public token if one is available
+    if (result && result.link_sessions && result.link_sessions.length > 0) {
+      for (const session of result.link_sessions) {
+        if (session.on_success && session.on_success.public_token) {
+          Logger.log("Public token found in /link/token/get response. Exchanging automatically.");
+          _exchangePublicTokenInternal(session.on_success.public_token);
+          // We'll just exchange the first one we find and then break.
+          break;
+        }
+      }
+    }
+
+    // Check for the results object from a completed Link flow and store it if present
+    if (result && result.link_sessions && result.link_sessions.length > 0 && result.link_sessions[0].results) {
+      const resultsObject = result.link_sessions[0].results;
+      sheet.getRange(lastRow, 2).setValue(JSON.stringify(resultsObject, null, 2));
+      SpreadsheetApp.getActiveSpreadsheet().toast(`Successfully retrieved and stored the 'results' object in column B.`);
+    } else {
+      Logger.log("The '/link/token/get' response did not contain a 'results' object. Nothing was written to the sheet.");
+      SpreadsheetApp.getActiveSpreadsheet().toast("Link token info retrieved, but no 'results' object was found to store.");
+    }
+
+  } catch (e) {
+    Logger.log('An error occurred in getLinkTokenInfo:');
+    Logger.log(e);
+    SpreadsheetApp.getActiveSpreadsheet().toast(`Failed to get link token info. Check logs for details. Error: ${e.message}`);
+  }
+}
+
+
+/**
  * Downloads and returns all transactions from Plaid.
  * 
  * @return {Object} the result of transactions.get, with all transactions.
  */
-function downloadAllTransactionsFromPlaid() {
-
-  /*// Force Plaid to refresh the transactions
-  let params = {
-    "contentType": "application/json",
-    "method": "post",
-    "payload": JSON.stringify({
-      "client_id": getSecrets().CLIENT_ID,
-      "secret": getSecrets().SECRET,
-      "access_token": getSecrets().ACCESS_TOKEN
-    }),
-    "muteHttpExceptions": true
-  };
-  makeRequest(`${getSecrets().URL}/transactions/refresh`, params);
-*/
-
-  // Prepare the request body
-  const body = {
-    "client_id": getSecrets().CLIENT_ID,
-    "secret": getSecrets().SECRET,
-    "access_token": getSecrets().ACCESS_TOKEN,
-    "options": {
-      "count": 500,
-      "offset": 0
-    },
-    "start_date": "2017-01-01",
-    "end_date": "2030-01-01"
-  };
-
-  // Condense the above into a single object
-  params = {
-    "contentType": "application/json",
-    "method": "post",
-    "payload": JSON.stringify(body),
-    "muteHttpExceptions": true
-  };
-
-  // Make the first POST request
-  const result = JSON.parse(makeRequest(`${getSecrets().URL}/transactions/get`, params));
-  const total_count = result.total_transactions;
-  let offset = 0;
-  let r;
-
-  Logger.log(`There are ${total_count} transactions in Plaid.`);
-
-  // Make repeated requests
-  while (offset <= total_count - 1) {
-    offset = offset + 500;
-    body.options.offset = offset;
-    params.payload = JSON.stringify(body);
-    r = JSON.parse(makeRequest(`${getSecrets().URL}/transactions/get`, params));
-    result.transactions = result.transactions.concat(r.transactions);
+function syncTransactionsFromPlaid() {
+  // Get the Plaid sheet for storing the cursor and access token
+  let sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Plaid");
+  if (!sheet) {
+    SpreadsheetApp.getActiveSpreadsheet().toast("The 'Plaid' sheet does not exist. Please create a link token and exchange it first.");
+    throw new Error("The 'Plaid' sheet does not exist.");
   }
 
-  // Replace the dates with JavaScript dates
-  for (const plaidTxn of result.transactions) plaidTxn.date = Date.parse(plaidTxn.date);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) { // Headers are in row 1
+      SpreadsheetApp.getActiveSpreadsheet().toast("No data found in the 'Plaid' sheet.");
+      throw new Error("No data in 'Plaid' sheet.");
+  }
 
-  Logger.log(`We downloaded ${result.transactions.length} transactions from Plaid.`);
-  return result;
+  let cursor = sheet.getRange(lastRow, 3).getValue() || null;
+  let accessToken = sheet.getRange(lastRow, 5).getValue();
 
+  if (!accessToken) {
+    Logger.log("No access token found in 'Plaid' sheet. Falling back to getSecrets().");
+    accessToken = getSecrets().ACCESS_TOKEN;
+  }
+
+  if (!accessToken) {
+      SpreadsheetApp.getActiveSpreadsheet().toast("No Plaid access token found. Please link an account first or set it in the script properties.");
+      throw new Error("Plaid access token not found.");
+  }
+
+  let added = [];
+  let modified = [];
+  let removed = [];
+  let accounts = [];
+  let hasMore = true;
+
+  try {
+    // Iterate through each page of new transaction updates for item
+    while (hasMore) {
+      const request = {
+        client_id: getSecrets().CLIENT_ID,
+        secret: getSecrets().SECRET,
+        access_token: accessToken,
+        cursor: cursor,
+      };
+
+      const params = {
+        method: "post",
+        contentType: "application/json",
+        payload: JSON.stringify(request),
+        muteHttpExceptions: true,
+      };
+
+      const responseText = makeRequest(`${getSecrets().URL}/transactions/sync`, params);
+      const data = JSON.parse(responseText);
+
+      if (data.error_code) {
+          throw new Error(`Plaid API Error: ${data.error_code} - ${data.error_message}`);
+      }
+
+      // On the first page of the response, get the accounts.
+      if (accounts.length === 0) {
+        accounts = data.accounts || [];
+      }
+
+      added = added.concat(data.added || []);
+      modified = modified.concat(data.modified || []);
+      removed = removed.concat(data.removed || []);
+      hasMore = data.has_more;
+      cursor = data.next_cursor;
+    }
+
+    // Persist cursor and updated data
+    sheet.getRange(lastRow, 3).setValue(cursor);
+    Logger.log(`Sync complete. Next cursor stored: ${cursor}`);
+
+    return { added, modified, removed, accounts };
+
+  } catch (e) {
+    Logger.log(`An error occurred during transaction sync: ${e.message}`);
+    Logger.log(e);
+    SpreadsheetApp.getActiveSpreadsheet().toast(`Error during transaction sync: ${e.message}`);
+    throw e;
+  }
 }
-
 
 /**
  * Fetch the transactions that are currently on the sheet.
@@ -363,101 +513,66 @@ function updateTransactions() {
 
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Transactions");
 
-  const existing = getTransactionsFromSheet(sheet);
-  const plaid = downloadAllTransactionsFromPlaid();
+  let existing = getTransactionsFromSheet(sheet);
+  const plaid = syncTransactionsFromPlaid();
 
-  // Prepare to determine changes
-  const changes = {
-    "added": [],
-    "removed": []
-  };
+  // Handle removed transactions
+  const removed_ids = plaid.removed.map(t => t.transaction_id);
+  let kept_transactions = existing.transactions.filter(t => !removed_ids.includes(t.id));
 
-  for (let i = 0; i < plaid.transactions.length; i++) {
+  // Handle modified transactions
+  const modified_map = new Map(plaid.modified.map(t => [t.transaction_id, t]));
+  for (let i = 0; i < kept_transactions.length; i++) {
+    const existing_txn = kept_transactions[i];
+    if (modified_map.has(existing_txn.id)) {
+      const plaid_txn = modified_map.get(existing_txn.id);
+      // Add account_name which is needed by plaidToSheet
+      plaid_txn.account_name = existing_txn.account;
+      plaid_txn.date = Date.parse(plaid_txn.date); // Ensure date is in correct format
+      kept_transactions[i] = plaidToSheet(plaid_txn, existing_txn);
+    }
+  }
 
-    // Add the account name, to save work later
+  // Handle added transactions
+  for (const plaidTxn of plaid.added) {
     let account_name = "?unknown?";
     for (let j = 0; j < plaid.accounts.length; j++) {
-      if (plaid.accounts[j].account_id === plaid.transactions[i].account_id) {
+      if (plaid.accounts[j].account_id === plaidTxn.account_id) {
         account_name = plaid.accounts[j].name;
         break;
       }
     }
-    plaid.transactions[i].account_name = account_name;
-
-    let existingTxn = undefined;
-    let existingIndex;
-
-    // Search for it in existing
-    existingIndex = getIndexOfPlaidFromSheet(existing.transactions, plaid.transactions[i]);
-    if (existingIndex >= 0) {
-      existingTxn = existing.transactions[existingIndex]
-    }
-
-    // Update existing with the transaction
-    const newSheetTxn = plaidToSheet(plaid.transactions[i], existingTxn);
-    if (existingIndex >= 0) {
-      existing.transactions[existingIndex] = newSheetTxn;
-    } else {
-      existing.transactions = saveNewSheetTransaction(existing.transactions, newSheetTxn);
-      changes.added.push(newSheetTxn);
-    }
-
-  }
-  Logger.log("Finished iterating through Plaid transactions.");
-
-  // Find which old transactions have been removed
-  for (const sheetTxn of existing.transactions) {
-    if (getIndexOfIdFromPlaid(plaid.transactions, sheetTxn.id) === -1) {
-      existing.transactions.splice(existing.transactions.indexOf(sheetTxn), 1);
-      changes.removed.push(sheetTxn);
-    }
+    plaidTxn.account_name = account_name;
+    plaidTxn.date = Date.parse(plaidTxn.date); // Ensure date is in correct format
+    const newSheetTxn = plaidToSheet(plaidTxn);
+    kept_transactions = saveNewSheetTransaction(kept_transactions, newSheetTxn);
   }
 
-  if (changes.added.length === 0 && changes.removed.length === 0) {
-    Logger.log("No transactions were added or removed.");
+  const num_added = plaid.added.length;
+  const num_modified = plaid.modified.length;
+  const num_removed = plaid.removed.length;
 
-    // Tell the user that there were no new transactions
-    // An error is raised if this is called by the trigger
+  if (num_added === 0 && num_modified === 0 && num_removed === 0) {
+    Logger.log("No new transaction changes.");
     try {
       SpreadsheetApp.getActiveSpreadsheet().toast("No new changes to the transactions were found.");
-    } catch (error) {
-
-    }
+    } catch (error) {}
   } else {
-
     // Write the transactions to the sheet
-    Logger.log(`There are ${existing.transactions.length} transactions to write.`);
-    writeTransactionsToSheet(sheet, existing.transactions, existing.headers);
-    Logger.log(`Finished writing transactions to the sheet named ${sheet.getName()}.`)
+    Logger.log(`There are ${kept_transactions.length} transactions to write.`);
+    writeTransactionsToSheet(sheet, kept_transactions, existing.headers);
+    Logger.log(`Finished writing transactions to the sheet named ${sheet.getName()}.`);
 
     // Format the sheet neatly
     formatNeatlyTransactions(plaid);
     Logger.log(`Finished formatting the sheet named ${sheet.getName()} neatly.`);
 
     // Produce a message to tell the user of the changes
-    // An error is raised if this is called by the trigger
     try {
       const ui = SpreadsheetApp.getUi();
-      let message = "";
-      if (changes.added.length > 0) {
-        for (const sheetTxn of changes.added) {
-          let date = new Date();
-          date.setTime(sheetTxn.date);
-          message = `${message}ADDED: £${sheetTxn.amount} on ${formatDate(date)} from ${sheetTxn.name}.\r\n`
-        }
-      }
-      if (changes.removed.length > 0) {
-        for (const sheetTxn of changes.removed) {
-          let date = new Date();
-          date.setTime(sheetTxn.date);
-          message = `${message}REMOVED: £${sheetTxn.amount} on ${formatDate(date)} from ${sheetTxn.name}.\r\n`
-        }
-      }
-      ui.alert(`${changes.added.length} added | ${changes.removed.length} removed`, message, ui.ButtonSet.OK);
-    } catch (error) {
-
-    }
-
+      let message = `Added: ${num_added}, Modified: ${num_modified}, Removed: ${num_removed}`;
+      ui.alert("Transaction Sync Complete", message, ui.ButtonSet.OK);
+    } catch (error) {}
   }
 
   // Update when this script was last run
@@ -705,6 +820,66 @@ function doEverything() {
 
 
 /**
+ * Creates a link token to be used to initialize Plaid Link.
+ */
+function createLinkToken() {
+
+  try {
+    // Prepare the request body
+    const body = {
+      "client_id": getSecrets().CLIENT_ID,
+      "secret": getSecrets().SECRET,
+      "client_name": "Bank Account to Sheets",
+      "language": "en",
+      "country_codes": ["US"],
+      "user": {
+        "client_user_id": "1",
+      },
+      "products": ["transactions"],
+      "hosted_link": {}
+    };
+
+    // Condense the above into a single object
+    const params = {
+      "contentType": "application/json",
+      "method": "post",
+      "payload": JSON.stringify(body),
+      "muteHttpExceptions": true
+    };
+
+    // Make the POST request
+    const responseText = makeRequest(`${getSecrets().URL}/link/token/create`, params);
+    const result = JSON.parse(responseText);
+
+    Logger.log('Full response from /link/token/create:');
+    Logger.log(JSON.stringify(result, null, 2));
+
+    // Get or create the 'Plaid' sheet
+    let sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Plaid");
+    if (!sheet) {
+      sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet("Plaid");
+    }
+
+    // Store the result in the sheet
+    const nextRow = sheet.getLastRow() + 1;
+    sheet.getRange(nextRow, 1).setValue(JSON.stringify(result, null, 2));
+
+    // Tell the user that it was successful
+    if (result.link_token) {
+        SpreadsheetApp.getActiveSpreadsheet().toast(`Successfully created and stored link token in 'Plaid' sheet.`);
+    } else {
+        SpreadsheetApp.getActiveSpreadsheet().toast('Call to Plaid was successful, but no link token was returned.');
+        Logger.log('Call to Plaid was successful, but no link token was returned. Full response logged above.');
+    }
+  } catch (e) {
+    Logger.log('An error occurred in createLinkToken:');
+    Logger.log(e);
+    SpreadsheetApp.getActiveSpreadsheet().toast(`Failed to create link token. Check logs for details. Error: ${e.message}`);
+  }
+}
+
+
+/**
  * Adds the Scripts menu to the menu bar at the top.
  */
 function onOpen() {
@@ -716,5 +891,8 @@ function onOpen() {
   menu.addItem("Format all sheets neatly", "formatAll");
   menu.addSeparator();
   menu.addItem("Do everything", "doEverything");
+  menu.addSeparator();
+  menu.addItem("Create Link Token", "createLinkToken");
+  menu.addItem("Get Link Token Info", "getLinkTokenInfo");
   menu.addToUi();
 }
