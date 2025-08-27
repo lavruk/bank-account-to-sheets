@@ -88,32 +88,6 @@ function _exchangePublicTokenInternal(publicToken) {
     }
 }
 
-/**
- * Exchanges a public token for an access token by prompting the user.
- */
-function exchangePublicToken() {
-  try {
-    const ui = SpreadsheetApp.getUi();
-    const response = ui.prompt(
-      'Exchange Public Token',
-      'Please enter the public_token from Plaid Link:',
-      ui.ButtonSet.OK_CANCEL);
-
-    if (response.getSelectedButton() == ui.Button.OK) {
-      const publicToken = response.getResponseText();
-      if (publicToken) {
-        _exchangePublicTokenInternal(publicToken);
-      } else {
-        ui.alert("No public token was entered.");
-      }
-    }
-  } catch (e) {
-    Logger.log(`An error occurred in exchangePublicToken: ${e.message}`);
-    Logger.log(e);
-    SpreadsheetApp.getUi().alert(`Error during public token exchange: ${e.message}`);
-  }
-}
-
 
 /**
  * Gets information about a link token.
@@ -280,64 +254,6 @@ function syncTransactionsFromPlaid() {
     throw e;
   }
 }
-    "contentType": "application/json",
-    "method": "post",
-    "payload": JSON.stringify({
-      "client_id": getSecrets().CLIENT_ID,
-      "secret": getSecrets().SECRET,
-      "access_token": getSecrets().ACCESS_TOKEN
-    }),
-    "muteHttpExceptions": true
-  };
-  makeRequest(`${getSecrets().URL}/transactions/refresh`, params);
-*/
-
-  // Prepare the request body
-  const body = {
-    "client_id": getSecrets().CLIENT_ID,
-    "secret": getSecrets().SECRET,
-    "access_token": getSecrets().ACCESS_TOKEN,
-    "options": {
-      "count": 500,
-      "offset": 0
-    },
-    "start_date": "2017-01-01",
-    "end_date": "2030-01-01"
-  };
-
-  // Condense the above into a single object
-  params = {
-    "contentType": "application/json",
-    "method": "post",
-    "payload": JSON.stringify(body),
-    "muteHttpExceptions": true
-  };
-
-  // Make the first POST request
-  const result = JSON.parse(makeRequest(`${getSecrets().URL}/transactions/get`, params));
-  const total_count = result.total_transactions;
-  let offset = 0;
-  let r;
-
-  Logger.log(`There are ${total_count} transactions in Plaid.`);
-
-  // Make repeated requests
-  while (offset <= total_count - 1) {
-    offset = offset + 500;
-    body.options.offset = offset;
-    params.payload = JSON.stringify(body);
-    r = JSON.parse(makeRequest(`${getSecrets().URL}/transactions/get`, params));
-    result.transactions = result.transactions.concat(r.transactions);
-  }
-
-  // Replace the dates with JavaScript dates
-  for (const plaidTxn of result.transactions) plaidTxn.date = Date.parse(plaidTxn.date);
-
-  Logger.log(`We downloaded ${result.transactions.length} transactions from Plaid.`);
-  return result;
-
-}
-
 
 /**
  * Fetch the transactions that are currently on the sheet.
@@ -917,9 +833,10 @@ function createLinkToken() {
       "language": "en",
       "country_codes": ["US"],
       "user": {
-        "client_user_id": Session.getEffectiveUser().getEmail(),
+        "client_user_id": "1",
       },
       "products": ["transactions"],
+      "hosted_link": {}
     };
 
     // Condense the above into a single object
@@ -977,7 +894,5 @@ function onOpen() {
   menu.addSeparator();
   menu.addItem("Create Link Token", "createLinkToken");
   menu.addItem("Get Link Token Info", "getLinkTokenInfo");
-  menu.addSeparator();
-  menu.addItem("Exchange Public Token", "exchangePublicToken");
   menu.addToUi();
 }
