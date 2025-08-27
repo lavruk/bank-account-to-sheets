@@ -42,18 +42,17 @@ function makeRequest(url, params) {
  * @param {string} publicToken The public token to exchange.
  */
 function _exchangePublicTokenInternal(publicToken) {
-    // Get or create the PlaidConfig sheet
-    let configSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("PlaidConfig");
-    if (!configSheet) {
-      configSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet("PlaidConfig");
-      configSheet.getRange("A1:C1").setValues([["last_cursor", "item_id", "access_token"]]);
-    } else {
-        // Ensure headers are present
-        if (configSheet.getRange("B1").getValue() !== "item_id") {
-            configSheet.getRange("B1").setValue("item_id");
-        }
-        if (configSheet.getRange("C1").getValue() !== "access_token") {
-            configSheet.getRange("C1").setValue("access_token");
+    // Get or create the Plaid sheet
+    let sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Plaid");
+    if (!sheet) {
+      sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet("Plaid");
+    }
+
+    // Ensure headers are present
+    const headers = ["link_token_response", "link_get_response", "last_cursor", "item_id", "access_token"];
+    for (let i = 0; i < headers.length; i++) {
+        if (sheet.getRange(1, i + 1).getValue() !== headers[i]) {
+            sheet.getRange(1, i + 1).setValue(headers[i]);
         }
     }
 
@@ -74,10 +73,10 @@ function _exchangePublicTokenInternal(publicToken) {
     const data = JSON.parse(responseText);
 
     if (data.access_token && data.item_id) {
-      // Store the new credentials
-      const nextRow = configSheet.getLastRow() + 1;
-      configSheet.getRange(nextRow, 2).setValue(data.item_id);
-      configSheet.getRange(nextRow, 3).setValue(data.access_token);
+      // Store the new credentials in the last row
+      const lastRow = sheet.getLastRow();
+      sheet.getRange(lastRow, 4).setValue(data.item_id);
+      sheet.getRange(lastRow, 5).setValue(data.access_token);
 
       SpreadsheetApp.getActiveSpreadsheet().toast(`Successfully exchanged public token. Access token stored.`);
       Logger.log(`Successfully exchanged public token for item_id: ${data.item_id}`);
@@ -200,15 +199,31 @@ function getLinkTokenInfo() {
  * @return {Object} the result of transactions.get, with all transactions.
  */
 function syncTransactionsFromPlaid() {
-  // Get or create the PlaidConfig sheet for storing the cursor
-  let configSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("PlaidConfig");
-  if (!configSheet) {
-    configSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet("PlaidConfig");
-    configSheet.getRange("A1").setValue("last_cursor");
-    SpreadsheetApp.getActiveSpreadsheet().toast("Created 'PlaidConfig' sheet for cursor storage.");
+  // Get the Plaid sheet for storing the cursor and access token
+  let sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Plaid");
+  if (!sheet) {
+    SpreadsheetApp.getActiveSpreadsheet().toast("The 'Plaid' sheet does not exist. Please create a link token and exchange it first.");
+    throw new Error("The 'Plaid' sheet does not exist.");
   }
 
-  let cursor = configSheet.getRange("A2").getValue() || null;
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) { // Headers are in row 1
+      SpreadsheetApp.getActiveSpreadsheet().toast("No data found in the 'Plaid' sheet.");
+      throw new Error("No data in 'Plaid' sheet.");
+  }
+
+  let cursor = sheet.getRange(lastRow, 3).getValue() || null;
+  let accessToken = sheet.getRange(lastRow, 5).getValue();
+
+  if (!accessToken) {
+    Logger.log("No access token found in 'Plaid' sheet. Falling back to getSecrets().");
+    accessToken = getSecrets().ACCESS_TOKEN;
+  }
+
+  if (!accessToken) {
+      SpreadsheetApp.getActiveSpreadsheet().toast("No Plaid access token found. Please link an account first or set it in the script properties.");
+      throw new Error("Plaid access token not found.");
+  }
 
   let added = [];
   let modified = [];
@@ -219,18 +234,6 @@ function syncTransactionsFromPlaid() {
   try {
     // Iterate through each page of new transaction updates for item
     while (hasMore) {
-      // Get the access token from the last row of the PlaidConfig sheet.
-      let accessToken = configSheet.getRange(configSheet.getLastRow(), 3).getValue();
-      if (!accessToken) {
-        Logger.log("No access token found in 'PlaidConfig' sheet. Falling back to getSecrets().");
-        accessToken = getSecrets().ACCESS_TOKEN;
-      }
-
-      if (!accessToken) {
-          SpreadsheetApp.getActiveSpreadsheet().toast("No Plaid access token found. Please link an account first or set it in the script properties.");
-          throw new Error("Plaid access token not found.");
-      }
-
       const request = {
         client_id: getSecrets().CLIENT_ID,
         secret: getSecrets().SECRET,
@@ -248,45 +251,93 @@ function syncTransactionsFromPlaid() {
       const responseText = makeRequest(`${getSecrets().URL}/transactions/sync`, params);
       const data = JSON.parse(responseText);
 
+      if (data.error_code) {
+          throw new Error(`Plaid API Error: ${data.error_code} - ${data.error_message}`);
+      }
+
       // On the first page of the response, get the accounts.
       if (accounts.length === 0) {
         accounts = data.accounts || [];
       }
 
-      // Add this page of results
-      added = added.concat(data.added);
-      modified = modified.concat(data.modified);
-      removed = removed.concat(data.removed);
-
+      added = added.concat(data.added || []);
+      modified = modified.concat(data.modified || []);
+      removed = removed.concat(data.removed || []);
       hasMore = data.has_more;
-
-      // Update cursor to the next cursor
       cursor = data.next_cursor;
     }
 
     // Persist cursor and updated data
-    configSheet.getRange("A2").setValue(cursor);
+    sheet.getRange(lastRow, 3).setValue(cursor);
     Logger.log(`Sync complete. Next cursor stored: ${cursor}`);
 
-    // The old function returned a single transactions array, so we will combine
-    // added and modified for now. This will be updated when we refactor updateTransactions.
-    // For now, this maintains some backward compatibility with the calling function.
-    const allTransactions = added.concat(modified);
-
-    // Replace the dates with JavaScript dates
-    for (const plaidTxn of allTransactions) plaidTxn.date = Date.parse(plaidTxn.date);
-
-    Logger.log(`Downloaded ${allTransactions.length} transactions from Plaid.`);
-    return { transactions: allTransactions, added, modified, removed, accounts };
+    return { added, modified, removed, accounts };
 
   } catch (e) {
     Logger.log(`An error occurred during transaction sync: ${e.message}`);
     Logger.log(e);
     SpreadsheetApp.getActiveSpreadsheet().toast(`Error during transaction sync: ${e.message}`);
-    // Re-throw the error to be handled by the calling function if necessary
     throw e;
   }
 }
+    "contentType": "application/json",
+    "method": "post",
+    "payload": JSON.stringify({
+      "client_id": getSecrets().CLIENT_ID,
+      "secret": getSecrets().SECRET,
+      "access_token": getSecrets().ACCESS_TOKEN
+    }),
+    "muteHttpExceptions": true
+  };
+  makeRequest(`${getSecrets().URL}/transactions/refresh`, params);
+*/
+
+  // Prepare the request body
+  const body = {
+    "client_id": getSecrets().CLIENT_ID,
+    "secret": getSecrets().SECRET,
+    "access_token": getSecrets().ACCESS_TOKEN,
+    "options": {
+      "count": 500,
+      "offset": 0
+    },
+    "start_date": "2017-01-01",
+    "end_date": "2030-01-01"
+  };
+
+  // Condense the above into a single object
+  params = {
+    "contentType": "application/json",
+    "method": "post",
+    "payload": JSON.stringify(body),
+    "muteHttpExceptions": true
+  };
+
+  // Make the first POST request
+  const result = JSON.parse(makeRequest(`${getSecrets().URL}/transactions/get`, params));
+  const total_count = result.total_transactions;
+  let offset = 0;
+  let r;
+
+  Logger.log(`There are ${total_count} transactions in Plaid.`);
+
+  // Make repeated requests
+  while (offset <= total_count - 1) {
+    offset = offset + 500;
+    body.options.offset = offset;
+    params.payload = JSON.stringify(body);
+    r = JSON.parse(makeRequest(`${getSecrets().URL}/transactions/get`, params));
+    result.transactions = result.transactions.concat(r.transactions);
+  }
+
+  // Replace the dates with JavaScript dates
+  for (const plaidTxn of result.transactions) plaidTxn.date = Date.parse(plaidTxn.date);
+
+  Logger.log(`We downloaded ${result.transactions.length} transactions from Plaid.`);
+  return result;
+
+}
+
 
 /**
  * Fetch the transactions that are currently on the sheet.
