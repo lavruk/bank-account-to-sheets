@@ -287,64 +287,6 @@ function syncTransactionsFromPlaid() {
     throw e;
   }
 }
-    "contentType": "application/json",
-    "method": "post",
-    "payload": JSON.stringify({
-      "client_id": getSecrets().CLIENT_ID,
-      "secret": getSecrets().SECRET,
-      "access_token": getSecrets().ACCESS_TOKEN
-    }),
-    "muteHttpExceptions": true
-  };
-  makeRequest(`${getSecrets().URL}/transactions/refresh`, params);
-*/
-
-  // Prepare the request body
-  const body = {
-    "client_id": getSecrets().CLIENT_ID,
-    "secret": getSecrets().SECRET,
-    "access_token": getSecrets().ACCESS_TOKEN,
-    "options": {
-      "count": 500,
-      "offset": 0
-    },
-    "start_date": "2017-01-01",
-    "end_date": "2030-01-01"
-  };
-
-  // Condense the above into a single object
-  params = {
-    "contentType": "application/json",
-    "method": "post",
-    "payload": JSON.stringify(body),
-    "muteHttpExceptions": true
-  };
-
-  // Make the first POST request
-  const result = JSON.parse(makeRequest(`${getSecrets().URL}/transactions/get`, params));
-  const total_count = result.total_transactions;
-  let offset = 0;
-  let r;
-
-  Logger.log(`There are ${total_count} transactions in Plaid.`);
-
-  // Make repeated requests
-  while (offset <= total_count - 1) {
-    offset = offset + 500;
-    body.options.offset = offset;
-    params.payload = JSON.stringify(body);
-    r = JSON.parse(makeRequest(`${getSecrets().URL}/transactions/get`, params));
-    result.transactions = result.transactions.concat(r.transactions);
-  }
-
-  // Replace the dates with JavaScript dates
-  for (const plaidTxn of result.transactions) plaidTxn.date = Date.parse(plaidTxn.date);
-
-  Logger.log(`We downloaded ${result.transactions.length} transactions from Plaid.`);
-  return result;
-
-}
-
 
 /**
  * Fetch the transactions that are currently on the sheet.
