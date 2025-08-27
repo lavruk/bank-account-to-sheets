@@ -88,7 +88,6 @@ function _exchangePublicTokenInternal(publicToken) {
     }
 }
 
-
 /**
  * Gets information about a link token.
  */
@@ -140,9 +139,10 @@ function getLinkTokenInfo() {
     // Automatically exchange public token if one is available
     if (result && result.link_sessions && result.link_sessions.length > 0) {
       for (const session of result.link_sessions) {
-        if (session.on_success && session.on_success.public_token) {
+        if (session.results && session.results.item_add_results && session.results.item_add_results.length > 0 && session.results.item_add_results[0].public_token) {
+          const publicToken = session.results.item_add_results[0].public_token;
           Logger.log("Public token found in /link/token/get response. Exchanging automatically.");
-          _exchangePublicTokenInternal(session.on_success.public_token);
+          _exchangePublicTokenInternal(publicToken);
           // We'll just exchange the first one we find and then break.
           break;
         }
