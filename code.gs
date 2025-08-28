@@ -779,6 +779,10 @@ function formatNeatlyWeeklySummary() {
 */
 function getHeaderRowNumber(sheet) {
 
+  if (sheet.getLastRow() === 0) {
+    return -1;
+  }
+
   const range = sheet.getRange(1, 1, sheet.getLastRow()).getValues();
   for (let i = 0; i < range.length; i++) {
     if (range[i][0] === "ID") {
