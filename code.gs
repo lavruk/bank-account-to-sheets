@@ -258,10 +258,7 @@ function updateTransactions() {
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Transactions");
   const existingTransactions = getTransactionsFromSheet(sheet);
   const plaid = syncTransactionsFromPlaid();
-  const headers = [
-    "Transaction ID", "Account ID", "Date", "Name", "Merchant Name", "Amount",
-    "Currency", "Pending", "Category", "Detailed Category", "Logo URL", "Website"
-  ];
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
 
   // Handle removed transactions
   const rowsToDelete = plaid.removed.map(removed => {
@@ -305,8 +302,11 @@ function getTransactionsFromSheet(sheet) {
   }
 
   const headers = [
-    "Transaction ID", "Account ID", "Date", "Name", "Merchant Name", "Amount",
-    "Currency", "Pending", "Category", "Detailed Category", "Logo URL", "Website"
+    "Transaction ID", "Account ID", "Account Owner", "Amount", "Authorized Date", "Authorized Datetime",
+    "Category", "Category ID", "Check Number", "Counterparties", "Date", "Datetime",
+    "ISO Currency Code", "Location", "Logo URL", "Merchant Entity ID", "Merchant Name", "Name",
+    "Payment Channel", "Payment Meta", "Pending", "Pending Transaction ID", "Personal Finance Category",
+    "Personal Finance Category Icon URL", "Transaction Code", "Transaction Type", "Unofficial Currency Code", "Website"
   ];
 
   // Set headers if sheet is empty
@@ -344,16 +344,32 @@ function transactionToRow(transaction) {
   return [
     transaction.transaction_id,
     transaction.account_id,
-    transaction.date,
-    transaction.name,
-    transaction.merchant_name,
+    transaction.account_owner,
     transaction.amount,
+    transaction.authorized_date,
+    transaction.authorized_datetime,
+    transaction.category ? JSON.stringify(transaction.category) : null,
+    transaction.category_id,
+    transaction.check_number,
+    transaction.counterparties ? JSON.stringify(transaction.counterparties) : null,
+    transaction.date,
+    transaction.datetime,
     transaction.iso_currency_code,
-    transaction.pending,
-    transaction.personal_finance_category ? transaction.personal_finance_category.primary : null,
-    transaction.personal_finance_category ? transaction.personal_finance_category.detailed : null,
+    transaction.location ? JSON.stringify(transaction.location) : null,
     transaction.logo_url,
-    transaction.website
+    transaction.merchant_entity_id,
+    transaction.merchant_name,
+    transaction.name,
+    transaction.payment_channel,
+    transaction.payment_meta ? JSON.stringify(transaction.payment_meta) : null,
+    transaction.pending,
+    transaction.pending_transaction_id,
+    transaction.personal_finance_category ? JSON.stringify(transaction.personal_finance_category) : null,
+    transaction.personal_finance_category_icon_url,
+    transaction.transaction_code,
+    transaction.transaction_type,
+    transaction.unofficial_currency_code,
+    transaction.website,
   ];
 }
 
