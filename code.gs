@@ -451,6 +451,52 @@ function formatDate(date) {
 
 
 /**
+ * Gets all the transactions from the sheet.
+ *
+ * @param {SpreadsheetApp.Sheet} sheet the sheet to get the transactions from.
+ * @return {Object} the transactions and the headers.
+ */
+function getTransactionsFromSheet(sheet) {
+  // Get the header row number, and the headers
+  const headerRowNumber = getHeaderRowNumber(sheet);
+  let headers = sheet.getRange(headerRowNumber, 1, 1, sheet.getLastColumn()).getValues().flat();
+  headers = headers.map(item => item.replace("?", ""));
+  headers = headers.map(item => item.toLowerCase());
+
+  // If there are no transactions then return
+  if (sheet.getLastRow() <= headerRowNumber) {
+    return {
+      "transactions": [],
+      "headers": headers
+    };
+  }
+
+  // Get the transactions
+  const sheetTxns = sheet.getRange(headerRowNumber + 1, 1, sheet.getLastRow() - headerRowNumber, sheet.getLastColumn()).getValues();
+
+  // Create the transaction objects
+  const result = [];
+  for (let i = 0; i < sheetTxns.length; i++) {
+    const obj = {};
+    for (let j = 0; j < headers.length; j++) {
+      if (headers[j] === "pending" || headers[j] === "internal") {
+        obj[headers[j]] = (sheetTxns[i][j] === true);
+      } else {
+        obj[headers[j]] = sheetTxns[i][j];
+      }
+    }
+    result.push(obj);
+  }
+
+  // Return the transactions and the headers
+  return {
+    "transactions": result,
+    "headers": headers
+  };
+}
+
+
+/**
  * Updates the transactions in the Transactions sheet.
  */
 function updateTransactions() {
