@@ -585,15 +585,17 @@ function updateTransactions() {
   }
 
   // Update when this script was last run
-  const range = sheet.getRange(getHeaderRowNumber(sheet) - 1, sheet.getLastColumn());
-  if (range !== undefined) {
+  const headerRow = getHeaderRowNumber(sheet);
+  if (headerRow > 1) {
+    const range = sheet.getRange(headerRow - 1, sheet.getLastColumn());
     const date = new Date();
     let minutes = date.getMinutes().toString();
-    if (parseInt(minutes) < 10) minutes = "0" + minutes;
+    if (parseInt(minutes) < 10) {
+      minutes = "0" + minutes;
+    }
     const dateString = `Last updated on ${formatDate(date)} at ${date.getHours()}:${minutes}.`;
     range.setValue(dateString);
   }
-
 }
 
 
