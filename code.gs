@@ -255,14 +255,108 @@ function syncTransactionsFromPlaid() {
  * Updates the transactions in the Transactions sheet.
  */
 function updateTransactions() {
-
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Transactions");
-
-  let existing = getTransactionsFromSheet(sheet);
+  const existingTransactions = getTransactionsFromSheet(sheet);
   const plaid = syncTransactionsFromPlaid();
+  const headers = [
+    "Transaction ID", "Account ID", "Date", "Name", "Merchant Name", "Amount",
+    "Currency", "Pending", "Category", "Detailed Category", "Logo URL", "Website"
+  ];
 
-  
+  // Handle removed transactions
+  const rowsToDelete = plaid.removed.map(removed => {
+    const existing = existingTransactions[removed.transaction_id];
+    return existing ? existing.rowNumber : null;
+  }).filter(rowNum => rowNum !== null);
+
+  // Sort rows in descending order to avoid shifting issues when deleting
+  rowsToDelete.sort((a, b) => b - a);
+  rowsToDelete.forEach(rowNum => {
+    sheet.deleteRow(rowNum);
+  });
+
+  // Handle modified transactions
+  plaid.modified.forEach(transaction => {
+    const existing = existingTransactions[transaction.transaction_id];
+    if (existing) {
+      const rowData = transactionToRow(transaction);
+      sheet.getRange(existing.rowNumber, 1, 1, headers.length).setValues([rowData]);
+    }
+  });
+
+  // Handle added transactions
+  if (plaid.added.length > 0) {
+    const rowsToAdd = plaid.added.map(transaction => transactionToRow(transaction));
+    sheet.getRange(sheet.getLastRow() + 1, 1, rowsToAdd.length, headers.length).setValues(rowsToAdd);
+  }
+
+  SpreadsheetApp.getActiveSpreadsheet().toast('Transactions updated successfully!');
 }
+
+/**
+ * Gets all the transactions from the "Transactions" sheet.
+ *
+ * @param {Sheet} sheet the sheet to get the transactions from.
+ * @return {Object} a map of transaction IDs to row data.
+ */
+function getTransactionsFromSheet(sheet) {
+  if (!sheet) {
+    sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet("Transactions");
+  }
+
+  const headers = [
+    "Transaction ID", "Account ID", "Date", "Name", "Merchant Name", "Amount",
+    "Currency", "Pending", "Category", "Detailed Category", "Logo URL", "Website"
+  ];
+
+  // Set headers if sheet is empty
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+    // Freeze the header row
+    sheet.setFrozenRows(1);
+  }
+
+  const data = sheet.getDataRange().getValues();
+  const transactions = {};
+  
+  // Start from 1 to skip header row
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const transactionId = row[0]; // Transaction ID is in the first column
+    if (transactionId) {
+      transactions[transactionId] = {
+        rowNumber: i + 1,
+        data: row
+      };
+    }
+  }
+
+  return transactions;
+}
+
+/**
+ * Converts a Plaid transaction object to a row for the Google Sheet.
+ *
+ * @param {Object} transaction the Plaid transaction object.
+ * @return {Array} an array of values for the row.
+ */
+function transactionToRow(transaction) {
+  return [
+    transaction.transaction_id,
+    transaction.account_id,
+    transaction.date,
+    transaction.name,
+    transaction.merchant_name,
+    transaction.amount,
+    transaction.iso_currency_code,
+    transaction.pending,
+    transaction.personal_finance_category ? transaction.personal_finance_category.primary : null,
+    transaction.personal_finance_category ? transaction.personal_finance_category.detailed : null,
+    transaction.logo_url,
+    transaction.website
+  ];
+}
+
 
 /**
  * Creates a link token to be used to initialize Plaid Link.
