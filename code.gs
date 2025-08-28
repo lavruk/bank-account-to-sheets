@@ -459,6 +459,15 @@ function formatDate(date) {
 function getTransactionsFromSheet(sheet) {
   // Get the header row number, and the headers
   const headerRowNumber = getHeaderRowNumber(sheet);
+
+  // If no header row is found, there are no transactions.
+  if (headerRowNumber === -1) {
+    return {
+      "transactions": [],
+      "headers": []
+    };
+  }
+
   let headers = sheet.getRange(headerRowNumber, 1, 1, sheet.getLastColumn()).getValues().flat();
   headers = headers.map(item => item.replace("?", ""));
   headers = headers.map(item => item.toLowerCase());
