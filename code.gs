@@ -190,11 +190,6 @@ function syncTransactionsFromPlaid() {
   let accessToken = sheet.getRange(lastRow, 5).getValue();
 
   if (!accessToken) {
-    Logger.log("No access token found in 'Plaid' sheet. Falling back to getSecrets().");
-    accessToken = getSecrets().ACCESS_TOKEN;
-  }
-
-  if (!accessToken) {
       SpreadsheetApp.getActiveSpreadsheet().toast("No Plaid access token found. Please link an account first or set it in the script properties.");
       throw new Error("Plaid access token not found.");
   }
@@ -254,57 +249,6 @@ function syncTransactionsFromPlaid() {
     throw e;
   }
 }
-
-/**
- * Fetch the transactions that are currently on the sheet.
- *
- * @param {SpreadsheetApp.Sheet} sheet the sheet to fetch the transactions from.
- * @return {Object} the transactions.
- */
-function getTransactionsFromSheet(sheet) {
-
-  const result = {};
-  result.transactions = [];
-  result.available = 0.0;
-  result.current = 0.0;
-
-  // Get the headers
-  result.headers = sheet.getRange(getHeaderRowNumber(sheet), 1, 1, sheet.getLastColumn()).getValues().flat();
-  result.headers = result.headers.map(item => item.replace("?", ""));
-  result.headers = result.headers.map(item => item.toLowerCase());
-
-  // Don't bother if it's empty
-  if (sheet.getLastRow() === getHeaderRowNumber(sheet)) {
-    Logger.log(`We fetched ${result.transactions.length} transactions from the sheet named ${sheet.getName()}.`);
-    return result;
-  }
-
-  // Get the transactions, starting with most recent
-  const values = sheet.getRange(getHeaderRowNumber(sheet) + 1, 1, sheet.getLastRow() - getHeaderRowNumber(sheet), sheet.getLastColumn()).getValues();
-  for (let i = 0; i < values.length; i++) {
-    const newSheetTxn = {};
-    for (let j = 0; j < result.headers.length; j++) {
-      newSheetTxn[result.headers[j].toLowerCase()] = values[i][j];
-    }
-    if (typeof newSheetTxn.date === "number") {
-      newSheetTxn.date = new Date(newSheetTxn.date)
-    }
-    result.transactions.push(newSheetTxn);
-
-    // Increment the balance(s)
-    result.current += Number(values[i][6]);
-    if (values[i][7] === false) {
-      result.available += Number(values[i][6]);
-    }
-
-  }
-
-  Logger.log(`We fetched ${result.transactions.length} transactions from the sheet named ${sheet.getName()}.`);
-
-  return result;
-
-}
-
 
 /**
  * Convert a Plaid transaction to a transaction for the sheet.
