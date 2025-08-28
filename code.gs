@@ -427,10 +427,20 @@ function writeTransactionsToSheet(sheet, sheetTxns, headers) {
 
   }
 
-  sheet.deleteRows(getHeaderRowNumber(sheet) + 2, sheet.getLastRow() - (getHeaderRowNumber(sheet) + 1));
-  sheet.insertRowsAfter(getHeaderRowNumber(sheet) + 1, result.length - 1);
-  sheet.getRange(getHeaderRowNumber(sheet) + 1, 1, result.length, sheet.getLastColumn()).setValues(result);
+  const headerRow = getHeaderRowNumber(sheet);
+  const lastRow = sheet.getLastRow();
 
+  // Delete all rows after the header
+  if (lastRow > headerRow) {
+    sheet.deleteRows(headerRow + 1, lastRow - headerRow);
+  }
+
+  if (result.length > 0) {
+    // Insert new rows
+    sheet.insertRowsAfter(headerRow, result.length);
+    // Write the new data
+    sheet.getRange(headerRow + 1, 1, result.length, headers.length).setValues(result);
+  }
 }
 
 
